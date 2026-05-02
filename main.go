@@ -108,14 +108,81 @@ type Worker struct {
 	completer TaskCompleter
 }
 
+func (worker *Worker) Process() error {
+	task, err := worker.claimer.Claim(worker.ID)
+	if err != nil {
+		return fmt.Errorf("Error occured when trying to claim: %v\n", err)
+	}
+	fmt.Printf("Worker [%s] claimed the task %s!\n", worker.ID, task.ID)
+
+	fmt.Println("Processing...")
+	time.Sleep(3 * time.Second)
+	payload := map[string]any{}
+	err = json.Unmarshal(task.Payload, &payload)
+	if err != nil {
+		return fmt.Errorf("Error occured when processing: %v\n", err)
+	}
+	fmt.Println(payload)
+
+	err = worker.completer.Complete(task.ID, StatusDone)
+	if err != nil {
+		return fmt.Errorf("Error occured when trying to complete: %v\n", err)
+	}
+	fmt.Printf("Worker [%s] completed the task %s!\n", worker.ID, task.ID)
+	return nil
+}
+
 func main() {
 	orch := &Orchestrator{tasks: make(map[string]*Task)}
 	prod := Producer{submitter: orch}
-	worker := Worker{ID: "w1", claimer: orch, completer: orch}
 
 	// 1. A freshly submitted task, waiting to be picked up
 	t1 := Task{
 		ID:         "task-001",
+		TaskType:   "llm.summarize",
+		Payload:    []byte(`{"model":"gpt-4","prompt":"Summarize this document..."}`),
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		Status:     StatusPending,
+		RetryCount: 0,
+		WorkerID:   nil, // no worker yet
+	}
+	t2 := Task{
+		ID:         "task-002",
+		TaskType:   "llm.summarize",
+		Payload:    []byte(`{"model":"gpt-4","prompt":"Summarize this document..."}`),
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		Status:     StatusPending,
+		RetryCount: 0,
+		WorkerID:   nil, // no worker yet
+	}
+	t3 := Task{
+		ID:         "task-003",
+		TaskType:   "llm.summarize",
+		Payload:    []byte(`{"model":"gpt-4","prompt":"Summarize this document..."}`),
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		Status:     StatusPending,
+		RetryCount: 0,
+		WorkerID:   nil, // no worker yet
+	}
+	t4 := Task{
+		ID:         "task-004",
+		TaskType:   "llm.summarize",
+		Payload:    []byte(`{"model":"gpt-4","prompt":"Summarize this document..."}`),
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		Status:     StatusPending,
+		RetryCount: 0,
+		WorkerID:   nil, // no worker yet
+	}
+	t5 := Task{
+		ID:         "task-005",
 		TaskType:   "llm.summarize",
 		Payload:    []byte(`{"model":"gpt-4","prompt":"Summarize this document..."}`),
 		CreatedAt:  time.Now(),
@@ -130,18 +197,36 @@ func main() {
 	if err != nil {
 		fmt.Printf("Error occured: %v\n", err)
 	}
-
-	recievedTask, err := worker.claimer.Claim(worker.ID)
+	err = prod.submitter.Submit(t2)
 	if err != nil {
 		fmt.Printf("Error occured: %v\n", err)
 	}
-	payload := map[string]any{}
-	err = json.Unmarshal(recievedTask.Payload, &payload)
+	err = prod.submitter.Submit(t3)
 	if err != nil {
 		fmt.Printf("Error occured: %v\n", err)
 	}
-	fmt.Println(payload)
+	err = prod.submitter.Submit(t4)
+	if err != nil {
+		fmt.Printf("Error occured: %v\n", err)
+	}
+	err = prod.submitter.Submit(t5)
+	if err != nil {
+		fmt.Printf("Error occured: %v\n", err)
+	}
 
-	worker.completer.Complete(recievedTask.ID, StatusDone)
-	fmt.Println("Done!")
+	var wg sync.WaitGroup
+
+	for i := range 3 {
+		wg.Go(func() {
+			id := fmt.Sprintf("w%d", i)
+			worker := Worker{ID: id, claimer: orch, completer: orch}
+			err := worker.Process()
+			if err != nil {
+				fmt.Printf("Error occured: %v\n", err)
+			}
+		})
+	}
+
+	wg.Wait()
+
 }
