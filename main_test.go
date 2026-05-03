@@ -9,7 +9,7 @@ import (
 )
 
 func TestConcurrentSubmitAndClaim(t *testing.T) {
-	orch := &Orchestrator{tasks: make(map[string]*Task)}
+	orch := &Orchestrator{Tasks: make(map[string]*Task)}
 
 	// 5 producers submitting concurrently
 	var submitWg sync.WaitGroup
@@ -39,7 +39,7 @@ func TestConcurrentSubmitAndClaim(t *testing.T) {
 
 	pendningTasks := 0
 	inProgressTasks := 0
-	for _, task := range orch.tasks {
+	for _, task := range orch.Tasks {
 		if task.Status == StatusPending {
 			pendningTasks++
 		}

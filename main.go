@@ -26,6 +26,7 @@ type Task struct {
 	WorkerID   *string
 	TaskType   string
 	RetryCount int
+	MaxRetries *int
 	ExpiresAt  time.Time
 	Status     TaskStatus
 }
@@ -44,19 +45,20 @@ type TaskCompleter interface {
 }
 
 type Orchestrator struct {
-	tasks map[string]*Task
-	mu    sync.Mutex
+	Tasks      map[string]*Task
+	MaxRetries int
+	mu         sync.Mutex
 }
 
 func (o *Orchestrator) Submit(task Task) error {
 	o.mu.Lock()
 
-	_, exists := o.tasks[task.ID]
+	_, exists := o.Tasks[task.ID]
 	if exists {
 		o.mu.Unlock()
 		return fmt.Errorf("task with ID=%s already exists in the queue", task.ID)
 	}
-	o.tasks[task.ID] = &task
+	o.Tasks[task.ID] = &task
 	o.mu.Unlock()
 
 	slog.Info("task submitted", "taskID", task.ID)
@@ -67,14 +69,23 @@ func (o *Orchestrator) Claim(workerID string) (*Task, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	if len(o.tasks) == 0 {
+	if len(o.Tasks) == 0 {
 		return nil, fmt.Errorf("queue is empty")
 	}
 
-	for _, task := range o.tasks {
+	for _, task := range o.Tasks {
+		if time.Now().After(task.ExpiresAt) {
+			continue
+		}
 		if task.Status == StatusPending {
 			task.WorkerID = &workerID
 			task.Status = StatusInProgress
+			task.UpdatedAt = time.Now()
+			return task, nil
+		} else if task.Status == StatusFailed && task.RetryCount < o.getMaxTaskRetries(task) {
+			task.WorkerID = &workerID
+			task.Status = StatusInProgress
+			task.RetryCount++
 			task.UpdatedAt = time.Now()
 			return task, nil
 		}
@@ -92,7 +103,7 @@ func (o *Orchestrator) Complete(taskID string, status TaskStatus) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	task, exists := o.tasks[taskID]
+	task, exists := o.Tasks[taskID]
 	if !exists {
 		return fmt.Errorf("task with ID=%s does not exists in the queue", taskID)
 	}
@@ -100,6 +111,13 @@ func (o *Orchestrator) Complete(taskID string, status TaskStatus) error {
 	task.UpdatedAt = time.Now()
 
 	return nil
+}
+
+func (o *Orchestrator) getMaxTaskRetries(task *Task) int {
+	if task.MaxRetries != nil && *task.MaxRetries >= 0 {
+		return *task.MaxRetries
+	}
+	return o.MaxRetries
 }
 
 type Producer struct {
@@ -137,7 +155,7 @@ func (worker *Worker) Process() error {
 }
 
 func main() {
-	orch := &Orchestrator{tasks: make(map[string]*Task)}
+	orch := &Orchestrator{Tasks: make(map[string]*Task), MaxRetries: 3}
 	prod := Producer{submitter: orch}
 
 	// 1. A freshly submitted task, waiting to be picked up
