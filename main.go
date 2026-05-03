@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -49,13 +50,16 @@ type Orchestrator struct {
 
 func (o *Orchestrator) Submit(task Task) error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 
 	_, exists := o.tasks[task.ID]
 	if exists {
-		return fmt.Errorf("Task with ID: [%s] already exists in the queue", task.ID)
+		o.mu.Unlock()
+		return fmt.Errorf("task with ID=%s already exists in the queue", task.ID)
 	}
 	o.tasks[task.ID] = &task
+	o.mu.Unlock()
+
+	slog.Info("task submitted", "taskID", task.ID)
 	return nil
 }
 
@@ -64,7 +68,7 @@ func (o *Orchestrator) Claim(workerID string) (*Task, error) {
 	defer o.mu.Unlock()
 
 	if len(o.tasks) == 0 {
-		return nil, fmt.Errorf("Queue is empty")
+		return nil, fmt.Errorf("queue is empty")
 	}
 
 	for _, task := range o.tasks {
@@ -76,21 +80,21 @@ func (o *Orchestrator) Claim(workerID string) (*Task, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("No tasks to be claimed")
+	return nil, fmt.Errorf("no tasks to be claimed")
 }
 
 func (o *Orchestrator) Complete(taskID string, status TaskStatus) error {
 	if status != StatusFailed &&
 		status != StatusDead &&
 		status != StatusDone {
-		return fmt.Errorf("Wrong terminal status")
+		return fmt.Errorf("wrong terminal status")
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
 	task, exists := o.tasks[taskID]
 	if !exists {
-		return fmt.Errorf("Task with ID: [%s] does not exists in the queue", taskID)
+		return fmt.Errorf("task with ID=%s does not exists in the queue", taskID)
 	}
 	task.Status = status
 	task.UpdatedAt = time.Now()
@@ -111,24 +115,24 @@ type Worker struct {
 func (worker *Worker) Process() error {
 	task, err := worker.claimer.Claim(worker.ID)
 	if err != nil {
-		return fmt.Errorf("Error occured when trying to claim: %v\n", err)
+		return fmt.Errorf("claim failed: %w", err)
 	}
-	fmt.Printf("Worker [%s] claimed the task %s!\n", worker.ID, task.ID)
+	slog.Info("task claimed", "workerID", worker.ID, "taskID", task.ID)
 
-	fmt.Println("Processing...")
+	slog.Info("processing task", "taskID", task.ID)
 	time.Sleep(3 * time.Second)
 	payload := map[string]any{}
 	err = json.Unmarshal(task.Payload, &payload)
 	if err != nil {
-		return fmt.Errorf("Error occured when processing: %v\n", err)
+		return fmt.Errorf("processing failed: %w\n", err)
 	}
-	fmt.Println(payload)
+	slog.Info("task payload", "taskID", task.ID, "payload", payload)
 
 	err = worker.completer.Complete(task.ID, StatusDone)
 	if err != nil {
-		return fmt.Errorf("Error occured when trying to complete: %v\n", err)
+		return fmt.Errorf("complete failed: %w", err)
 	}
-	fmt.Printf("Worker [%s] completed the task %s!\n", worker.ID, task.ID)
+	slog.Info("task completed", "workerID", worker.ID, "taskID", task.ID)
 	return nil
 }
 
@@ -222,7 +226,7 @@ func main() {
 			worker := Worker{ID: id, claimer: orch, completer: orch}
 			err := worker.Process()
 			if err != nil {
-				fmt.Printf("Error occured: %v\n", err)
+				slog.Error("worker failed", "workerID", id, "error", err)
 			}
 		})
 	}
